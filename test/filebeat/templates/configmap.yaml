@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-config
+  labels:
+    app: filebeat
+data:
+  filebeat.yaml: |-
+    # k8s autodiscover
+    # To enable hints based autodiscover, you need to remove `filebeat.config.inputs` configuration and uncomment this:
+    filebeat.autodiscover:
+      providers:
+        - type: kubernetes
+          # 开启基于提供程序提示的自动发现，它会在kubernetes pod注释或去具有前缀co.elastic.logs的docker标签中查找提示
+          # hints.enabled: true
+          templates:
+            # 这里可以新建多个模板以匹配多个不同的条件
+            - condition.and:
+                - equals:
+                    kubernetes.namespace: default
+              config:
+                # 同理这里也可以配置多个 inputs
+                - type: docker
+                  containers:
+                    # all, stdout, stderr
+                    stream: all
+                    ids:
+                      - "${data.kubernetes.container.id}"
+                  # 添加自定义字段，默认放在字段 "fields" 下
+                  fields:
+                    log_type: "${data.kubernetes.container.name}"
+                  # 合并 java 异常栈为一条，将匹配的行放在不匹配行的后面
+                  multiline:
+                    pattern: '^\t'
+                    negate: false
+                    match: after
+                  # # 对合法的 json 字符串进行解析，注意必须是 json 字符串，json object 解析不出来
+                  # json:
+                  #   # 解析出的 key 不要放在 root 下，默认放在字段 "json" 下，这样可以避免很多 key 冲突
+                  #   keys_under_root: false
+                  #   add_error_key: true
+                  #   # 如果解析出的 key 和已有的 key 冲突，覆盖
+                  #   overwrite_keys: true
+                  #   # 指定以哪个 key 的值为标准，进行匹配过滤和多行合并，这个应以 debug publish 解析出的字段为准，而不是原生 docker logs
+                  #   # 的字段，比如"log"。因为在 line filtering、multiline 和 JSON decoding 之前已经被解析成了到了"message"中，并且提
+                  #   # 取了"timestamps"到"@timestamps"，因此如果这里指定"log"的话，根本解析不出日志来。
+                  #   # message_key 只能指定 root 下的 key，而且 value 必须是 string 类型的，如果是 jsonObject 会报错
+                  #   message_key: "message"
+                  #   ignore_decoding_error: false
+    # filter and enhance fields
+    processors:
+      # # 添加 k8s 相关元数据
+      # - add_kubernetes_metadata:
+      #     in_cluster: true
+      # 字段重命名
+      - rename:
+          fields:
+            - from: "message" 
+              to: "raw_message"
+      # 对合法的 json 字符串进行解析，注意必须是 json 字符串，json object 解析不出来
+      - decode_json_fields:
+          # 指定要解析的字段
+          fields: ["raw_message"]
+          # 是否解析 json 数组
+          process_array: true
+          # 最大 json 解析层数
+          max_depth: 10
+          # `target: ""`代表合并到 event 根下，或者指定的字段下，不写则覆盖被解析的字段，比如"message"
+          target: "json_message"
+          # 如果已经存在解析出来的 key，是否覆盖
+          overwrite_keys: true
+      # 保证 es mapping 不会有字段类型冲突
+      - rename:
+          # 如果字段 json_message.message 不是字符串，而是 json object 就改名为 json_message.json
+          when:
+            not:
+              regexp:
+                json_message.message: ".*"
+          fields:
+            - from: "json_message.message"
+              to: "json_message.json"
+      # 丢掉一些不需要的字段
+      - drop_fields:
+          fields: ['input', 'beat', 'prospector', 'kubernetes']
+      # 如果是 json 类型的日志，丢弃原生日志
+      - drop_fields:
+          when: 
+            has_fields: ['json_message']
+          fields: ['raw_message']
+    # 配置 elasticsearch index template
+    setup.template.name: "logs"
+    setup.template.pattern: "logs-*"
+    # 如果为 false，在修改了 setup.template.settings 后需要手动删除 elasticsearch 的 template 才有效
+    setup.template.overwrite: true
+    setup.template.settings:
+      index.number_of_shards: 3
+      index.codec: best_compression
+      # 必须启用！默认模版会把 event 信息放到 _source 字段下
+      _source.enabled: true
+    # 设置 elasticsearch output
+    output.elasticsearch:
+      hosts: ["${ES_HOST}:${ES_PORT}"]
+      index: "logs-%{[fields.log_type]}-%{+yyyy.MM.dd}"
+    # =========== filebeat 运行日志 =========== 
+    path.logs: /usr/share/filebeat/logs
+    # =========== debug logging =========== 
+    logging.level: debug
+    # Enable debug output for selected components，可用的选项 "beat", "publish", "service", 全选使用 ["*"]
+    logging.selectors: ["publish"]
+    # 可以通过 docker logs 查看 debug 日志
+    logging.to_stderr: true
+    logging.to_eventlog: false
+    logging.to_syslog: false
+    # 改为 true 启用写到指定 file 文件
+    logging.to_files: false
+    logging.files:
+      path: /usr/share/filebeat/logs
+      name: filebeat
+    logging.json: false
