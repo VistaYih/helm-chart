@@ -15,17 +15,18 @@ data:
           # hints.enabled: true
           templates:
             # 这里可以新建多个模板以匹配多个不同的条件
-            - condition.and:
-                - equals:
-                    kubernetes.namespace: default
+            - condition:
+                equals:
+                  kubernetes.namespace: default
               config:
                 # 同理这里也可以配置多个 inputs
-                - type: docker
+                - type: log
                   containers:
                     # all, stdout, stderr
                     stream: all
-                    ids:
-                      - "${data.kubernetes.container.id}"
+                  paths:
+                    - /var/log/containers/*-${data.kubernetes.container.id}.log
+                  symlinks: true
                   # 添加自定义字段，默认放在字段 "fields" 下
                   fields:
                     log_type: "${data.kubernetes.container.name}"
@@ -47,11 +48,25 @@ data:
                   #   # message_key 只能指定 root 下的 key，而且 value 必须是 string 类型的，如果是 jsonObject 会报错
                   #   message_key: "message"
                   #   ignore_decoding_error: false
+            - condition:
+                equals:
+                  kubernetes.container.images: "yishuida/test-log"
+              config:
+                # 同理这里也可以配置多个 inputs
+              - type: log
+                containers:
+                  # all, stdout, stderr
+                  stream: all
+                  fields:
+                    log_type: "${data.kubernetes.container.name}"
+                paths:
+                  - /var/log/containers/*-${data.kubernetes.container.id}.log
+                symlinks: true
+
     # filter and enhance fields
     processors:
       # # 添加 k8s 相关元数据
-      # - add_kubernetes_metadata:
-      #     in_cluster: true
+      - add_kubernetes_metadata:
       # 字段重命名
       - rename:
           fields:

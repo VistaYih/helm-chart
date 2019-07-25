@@ -21,6 +21,8 @@ spec:
           "-c", "/etc/filebeat.yaml",
           "-e"
         ]
+        securityContext:
+          runAsUser: 0
         env:
         - name: ES_HOST
           value: "elasticsearch"
@@ -42,6 +44,10 @@ spec:
         - name: varlibdockercontainers
           mountPath: /var/lib/docker/containers
           readOnly: true
+        - name: varlogcontainers
+          mountPath: /var/log/containers
+        - name: varlogpods
+          mountPath: /var/log/pods
       # 创建 volumes
       volumes:
       - name: config
@@ -66,3 +72,6 @@ spec:
       - name: varlogpods
         hostPath:
           path: /var/log/pods
+      - name: varlogcontainers
+        hostPath:
+          path: /var/log/containers
